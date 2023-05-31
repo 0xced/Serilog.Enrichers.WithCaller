@@ -1,7 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Diagnostics;
-
+using System.Linq;
 using Serilog.Core;
 using Serilog.Events;
 using System.Text;
@@ -10,6 +11,19 @@ namespace Serilog.Enrichers.WithCaller
 {
     public class CallerEnricher : ILogEventEnricher
     {
+        public const string CallerPropertyName = "Caller";
+        public const string CallerInfoPropertyName = "CallerInfo";
+        public const string ClassPropertyName = "Class";
+        public const string NamespacePropertyName = "Namespace";
+        public const string MethodPropertyName = "Method";
+        public const string NamePropertyName = "Name";
+        public const string TypePropertyName = "Type";
+        public const string ParametersPropertyName = "Parameters";
+        public const string FilePropertyName = "File";
+        public const string PathPropertyName = "Path";
+        public const string LinePropertyName = "Line";
+        public const string ColumnPropertyName = "Column";
+
         private readonly bool _includeFileInfo;
         private readonly int _maxDepth;
         private Predicate<MethodBase> _filter;
@@ -46,7 +60,8 @@ namespace Serilog.Enrichers.WithCaller
                 StackFrame stack = new StackFrame(skipFrames, _includeFileInfo);
                 if (!stack.HasMethod())
                 {
-                    logEvent.AddPropertyIfAbsent(new LogEventProperty("Caller", new ScalarValue("<unknown method>")));
+                    logEvent.AddPropertyIfAbsent(new LogEventProperty(CallerPropertyName, new ScalarValue("<unknown method>")));
+                    logEvent.AddPropertyIfAbsent(new LogEventProperty(CallerInfoPropertyName, new StructureValue(Enumerable.Empty<LogEventProperty>())));
                     return;
                 }
 
@@ -83,21 +98,49 @@ namespace Serilog.Enrichers.WithCaller
 
                 if (foundFrames == 1)
                 {
-                    logEvent.AddPropertyIfAbsent(new LogEventProperty("CallerType", new ScalarValue(callerType)));
-                    logEvent.AddPropertyIfAbsent(new LogEventProperty("CallerMethod", new ScalarValue(callerMethod)));
-                    logEvent.AddPropertyIfAbsent(new LogEventProperty("CallerParameters", new ScalarValue(callerParameters)));
-                    logEvent.AddPropertyIfAbsent(new LogEventProperty("CallerFileName", new ScalarValue(callerFileName)));
-                    logEvent.AddPropertyIfAbsent(new LogEventProperty("CallerLineNo", new ScalarValue(callerLineNo)));
+                    logEvent.AddPropertyIfAbsent(new LogEventProperty(CallerInfoPropertyName, CreateCallerStructureValue(method, stack)));
                 }
 
                 if (_maxDepth <= foundFrames)
                 {
-                    logEvent.AddPropertyIfAbsent(new LogEventProperty("Caller", new ScalarValue(caller.ToString())));
+                    logEvent.AddPropertyIfAbsent(new LogEventProperty(CallerPropertyName, new ScalarValue(caller.ToString())));
                     return;
                 }
 
                 skipFrames++;
             }
+        }
+
+        private static StructureValue CreateCallerStructureValue(MethodBase method, StackFrame stackFrame)
+        {
+            var properties = new List<LogEventProperty>
+            {
+                new LogEventProperty(ClassPropertyName, new ScalarValue(method.DeclaringType?.Name)),
+                new LogEventProperty(NamespacePropertyName, new ScalarValue(method.DeclaringType?.Namespace)),
+                new LogEventProperty(MethodPropertyName, new StructureValue(new[]
+                {
+                    new LogEventProperty(NamePropertyName, new ScalarValue(method.Name)),
+                    new LogEventProperty(ParametersPropertyName, new SequenceValue(method.GetParameters().Select(p =>
+                    {
+                        return new StructureValue(new[]
+                        {
+                            new LogEventProperty(TypePropertyName, new ScalarValue(p.ParameterType.FullName)),
+                            new LogEventProperty(NamePropertyName, new ScalarValue(p.Name)),
+                        });
+                    }))),
+                })),
+            };
+            var path = stackFrame.GetFileName();
+            if (path != null)
+            {
+                properties.Add(new LogEventProperty(FilePropertyName, new StructureValue(new[]
+                {
+                    new LogEventProperty(PathPropertyName, new ScalarValue(path)),
+                    new LogEventProperty(LinePropertyName, new ScalarValue(stackFrame.GetFileLineNumber())),
+                    new LogEventProperty(ColumnPropertyName, new ScalarValue(stackFrame.GetFileColumnNumber())),
+                })));
+            }
+            return new StructureValue(properties);
         }
 
         private string GetParameterFullNames(ParameterInfo[] parameterInfos, string separator = ", ")
